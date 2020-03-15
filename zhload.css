@@ -1,0 +1,70 @@
+@charset "utf-8";
+/* CSS Document */
+.zhl-header img{
+	width: 100%;
+}
+.zhl-loadapp{
+	position: relative;
+}
+.zhl-loadapp img{
+	width: 100%;
+	position: relative;
+	z-index: 9;
+}
+.zhl-loadapp .loadapp-input{
+	position: absolute;
+    top: 0;
+    left: 0;
+    border: 0;
+    opacity: 0;
+    z-index: 10;
+    height: 100%;
+    width: 100%;
+    -webkit-appearance: none;
+}
+.zhl-mainpanel{
+	background: url(../images/zhl-bg.png) no-repeat 100% 100%;
+	padding-top: 60px;
+	position: relative;
+	padding-bottom: 20px;
+}
+.zhl-mainjc{
+	position: absolute;
+	left: 0;
+	top: 8px;
+	height: 50px;
+	visibility: hidden;
+}
+.zhl-intro{
+	padding: 10px 16px;
+}
+.zhl-intro img{
+	width: 100%;
+}
+.zhl-special{overflow: hidden;padding: 10px;}
+.zhl-special .list{
+	float: left;
+	padding: 0 6px;
+	width: 33.33%;
+}
+.zhl-special .list img{
+	width: 100%;
+}
+.zhl-bottom{
+	width: 100%;
+}
+.zhl-service{
+	position: fixed;
+	bottom: 80px;
+	right: 16px;
+	    z-index: 100;
+}
+.zhl-service img{
+	width: 92px;
+}
+.zhl-jcintro{
+	width: 100%;
+}
+.zhl-jcintro img{
+	width: 100%;
+}

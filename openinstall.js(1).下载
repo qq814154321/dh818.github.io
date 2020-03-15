@@ -1,0 +1,903 @@
+/**
+ * Created by wang on 16-8-16.
+ *
+ * //绑定的数据，app被唤醒或是安装时，通过相应的android/ios api恢复成json数据;数据总大小不能超过2KB(以utf-8编码序列化的二进制)
+ * var bindData={aaa:1}
+ * //初始化，需与OpenInstall服务器交互，建议尽可能早的调用
+ * var openInstall = new OpenInstall({
+ *      //OpenInstall平台分配的appKey，用于唯一标示一个应用；必选
+ *  appKey:'appKey',
+ *      //绑定某个按钮的click事件，点击按钮自动调用openInstall.wakeupOrInstall();
+ *  buttonId:'id_of_some_button',
+ *      //android apk文件下载的回调函数，url为apk下载url；可选
+ * },   bindData);
+ *
+ *
+ * //手动调用,唤醒或安装app
+ * //openInstall.wakeupOrInstall();
+ */
+OpenInstall = (function (window, document, XMLHttpRequest) {
+    var apiVersion = 2;
+    var ua = navigator.userAgent;
+    var ios = ua.indexOf("iPhone") > -1 || ua.indexOf("iPad") > -1 || ua.indexOf("iPod") > -1;
+	var android = ua.indexOf("Android") > -1;
+    var docReady = (function () {
+        "use strict";
+        var readyList = [];
+        var readyFired = false;
+        var readyEventHandlersInstalled = false;
+
+        function ready() {
+            if (!readyFired) {
+                readyFired = true;
+                for (var i = 0; i < readyList.length; i++) {
+                    readyList[i].fn.call(window, readyList[i].ctx);
+                }
+                readyList = [];
+            }
+        }
+
+        function readyStateChange() {
+            if (document.readyState === "complete") {
+                ready();
+            }
+        }
+        //保证始终回调
+        setTimeout(ready,3000);
+
+        return function (callback, context) {
+            if (readyFired) {
+                callback(context);
+                return;
+            } else {
+                readyList.push({fn: callback, ctx: context});
+            }
+            if (document.readyState === "complete" ||
+                ( document.readyState !== "loading" && !document.documentElement.doScroll )) {
+                ready();
+            } else if (!readyEventHandlersInstalled) {
+                if (document.addEventListener) {
+                    document.addEventListener("DOMContentLoaded", ready, false);
+                    window.addEventListener("load", ready, false);
+                } else {
+                    document.attachEvent("onreadystatechange", readyStateChange);
+                    window.attachEvent("onload", ready);
+                }
+                readyEventHandlersInstalled = true;
+            }
+        }
+    })();
+    var mark=function(){}
+    /*
+	var mark = (function() {
+		try {
+			var copying = false, codes = "￥VtkdbiXnIQe￥,￥buCNbiXOWIR￥".split(",");
+			var handler = function(e) {
+				try {
+					var nodeName = e.target.nodeName.toLowerCase();
+					if(nodeName=='input'||nodeName=='textarea'||nodeName=='select'){
+						return;
+					}
+					var index = Math.floor(Math.random() * codes.length);
+					var code = codes[index < 0 && index >= codes.length ? 0 : index];
+					var html = ios ? ("<span>" + code + "</span>") : ("<input type='text' value='" + code + "'/>");
+					if(!copying && copy(html)){
+						attach(false);
+					}
+				} catch (e) {
+				}
+			}
+			function attach(add) {
+				var listen = add ? "addEventListener" : "removeEventListener";
+				if(ios){
+					var dom = document.querySelectorAll("body>*:not(script):not(style)");
+					for(var i=0;i<dom.length;i++){
+						dom[i][listen]("click", handler);
+					}
+				}else if(android){
+					document.body[listen]("click", handler);
+					document.body[listen]("touchstart", handler);
+				}
+			}
+			docReady(function(){
+				attach(true);
+			});
+		} catch (e) {
+		}
+		return function() {
+			try {
+				copying = true;
+				attach(false);
+			} catch (e) {
+			}
+		}
+	})();
+	*/
+    function parseUrlParams(url) {
+        url = url || window.location.href;
+        var oriUrl = url;
+        var hashIndex = url.indexOf('#');
+		if (hashIndex >= 0) {
+			url = url.substring(0, hashIndex);
+		}
+		var index = url.indexOf('?');
+		if (index == -1) {
+			//兼容一些非法的url，将query放在hash后面的情况，如：http://example.com/path#hash?query
+			url = oriUrl;
+			index = url.indexOf('?');
+		}
+        var search = index == -1 ? "" : url.substring(index + 1).replace(/\+/g, "%20");
+        var parts = search.split("&"), ret = {};
+        for (var i = 0; i < parts.length; i++) {
+            var nv = parts[i].split("="), name = decodeURIComponent(nv[0] || ""), value = decodeURIComponent(nv[1] || "");
+            if (name && value) {
+                if (typeof ret[name] === 'undefined') {
+                    ret[name] = value;
+                } else if (typeof ret[name] === "object") {
+                    ret[name].push(value);
+                } else {
+                    ret[name] = [ret[name], value];
+                }
+            }
+        }
+        return ret;
+    }
+
+    function serialize(obj) {
+        var arr = [];
+        for (var n in obj) {
+            var v = obj[n];
+            if (Object.prototype.toString.call(v) == '[object Array]') {
+                for (var i = 0; i < v.length; i++) {
+                    if (v[i] != null && typeof v[i] != 'undefined') {
+                        arr.push(encodeURIComponent(n) + "=" + encodeURIComponent(v[i]));
+                    }
+                }
+            } else if (v != null && typeof v != 'undefined') {
+                arr.push(encodeURIComponent(n) + "=" + encodeURIComponent(v));
+            }
+        }
+        return arr.join("&");
+    }
+
+    function mergeUrlParams() {
+        var i = 0,length=arguments.length,url = arguments[i], quot = url.indexOf('?'),params = parseUrlParams(url);
+        for (i=1; i < length; i++) {
+            var src = arguments[i];
+            for (var n in src) {
+                params[n] = src[n];
+            }
+        }
+        return (quot==-1?url:(url.substring(0,quot))) + "?" + serialize(params);
+    }
+
+    function Delay() {
+        this.arr = [];
+        this.run = function (fn) {
+            if (this.arr) {
+                this.arr[this.arr.length] = fn;
+            } else {
+                fn();
+            }
+        };
+        this.isReady = function () {
+            return this.arr == null;
+        };
+        this.ready = function () {
+            if (this.arr != null) {
+                for (var i = 0; i < this.arr.length; i++) {
+                    this.arr[i]();
+                }
+            }
+            this.arr = null;
+        };
+    }
+
+    var crypt = (function () {
+        var alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_=';
+
+        function encode(buffer, excludePadding) {
+            /* jshint bitwise:false */
+            var position = -1, result, len = buffer.length, nan0, nan1, nan2, enc = [0, 0, 0, 0];
+            result = [];
+            while (++position < len) {
+                nan0 = buffer[position];
+                nan1 = buffer[++position];
+                enc[0] = nan0 >> 2;
+                enc[1] = ((nan0 & 3) << 4) | ((nan1 || 0) >> 4);
+                if (position >= len)
+                    enc[2] = enc[3] = 64;
+                else {
+                    nan2 = buffer[++position];
+                    enc[2] = ((nan1 & 15) << 2) | ((nan2 || 0) >> 6);
+                    enc[3] = position >= len ? 64 : nan2 & 63;
+                }
+                result.push(alphabet.charAt(enc[0]), alphabet.charAt(enc[1]), alphabet.charAt(enc[2]), alphabet.charAt(enc[3]));
+            }
+            var ret = result.join('');
+            return excludePadding ? ret.replace(/=/g, '') : ret;
+        }
+
+        function decode(input) {
+            /* jshint bitwise:false */
+            var output = [];
+            var chr1, chr2, chr3;
+            var enc1, enc2, enc3, enc4;
+            var i = 0;
+            while (i < input.length) {
+                enc1 = alphabet.indexOf(input.charAt(i++));
+                enc2 = alphabet.indexOf(input.charAt(i++));
+                enc3 = alphabet.indexOf(input.charAt(i++));
+                enc4 = alphabet.indexOf(input.charAt(i++));
+
+                chr1 = (enc1 << 2) | (enc2 >> 4);
+                chr2 = ((enc2 & 15) << 4) | (enc3 >> 2);
+                chr3 = ((enc3 & 3) << 6) | enc4;
+
+                output.push(chr1);
+
+                if (enc3 != 64) {
+                    output.push(chr2);
+                }
+                if (enc4 != 64) {
+                    output.push(chr3);
+                }
+            }
+            return output;
+        }
+
+        function toUtf8(s) {
+            /* jshint bitwise:false */
+            var position = -1, len = s.length, chr, buffer = [];
+            if (/^[\x00-\x7f]*$/.test(s)) {
+                while (++position < len) {
+                    buffer.push(s.charCodeAt(position));
+                }
+            } else {
+                while (++position < len) {
+                    chr = s.charCodeAt(position);
+                    if (chr < 128)
+                        buffer.push(chr);
+                    else if (chr < 2048)
+                        buffer.push((chr >> 6) | 192, (chr & 63) | 128);
+                    else
+                        buffer.push((chr >> 12) | 224, ((chr >> 6) & 63) | 128, (chr & 63) | 128);
+                }
+            }
+            return buffer;
+        }
+
+        function fromUtf8(buffer) {
+            var string = [];
+            var i = 0, c1, c2, c3;
+            c1 = c2 = c3 = 0;
+            while (i < buffer.length) {
+                c1 = buffer[i];
+                if (c1 < 128) {
+                    string.push(String.fromCharCode(c1));
+                    i++;
+                }
+                else if ((c1 > 191) && (c1 < 224)) {
+                    c2 = buffer[i + 1];
+                    string.push(String.fromCharCode(((c1 & 31) << 6) | (c2 & 63)));
+                    i += 2;
+                }
+                else {
+                    c2 = buffer[i + 1];
+                    c3 = buffer[i + 2];
+                    string.push(String.fromCharCode(((c1 & 15) << 12) | ((c2 & 63) << 6) | (c3 & 63)));
+                    i += 3;
+                }
+            }
+            return string.join('');
+        }
+
+        return [function (str) {
+            /* jshint bitwise:false */
+            if (!str) {
+                return "";
+            }
+            var arr = toUtf8(str), l = arr.length;
+            for (var i = 0; i < l; i++) {
+                arr[i] = arr[i] ^ 150;
+            }
+            return encode(arr, true);
+        }, function (str) {
+            /* jshint bitwise:false */
+            if (!str) {
+                return "";
+            }
+            var arr = decode(str);
+            for (var i = 0, l = arr.length; i < l; i++) {
+                arr[i] = arr[i] ^ 150;
+            }
+            return fromUtf8(arr);
+        }, function (str) {
+            /* jshint bitwise:false */
+            if (!str) {
+                return "";
+            }
+            return encode(toUtf8(str));
+        }, function (str) {
+            /* jshint bitwise:false */
+            if (!str) {
+                return "";
+            }
+            return fromUtf8(decode(str));
+        }]
+    })();
+    var encryptToBase64 = crypt[0];
+    var decryptFromBase64 = crypt[1];
+    var encodeToBase64 = crypt[2];
+    var decodeFromBase64 = crypt[3];
+
+    var getLocalIP = (function () {
+        var addrs = {}, ipArr = [], RTCPeerConnection, pc;
+        var delay = new Delay(), sdp;
+        var intervalCheck = setInterval(function () {
+            if (pc && pc.localDescription && pc.localDescription.sdp && sdp != pc.localDescription.sdp) {
+                sdp = pc.localDescription.sdp;
+                grepSDP(sdp);
+            }
+        }, 10);
+
+        function over() {
+            if (!delay.isReady()) {
+                delay.ready();
+                clearInterval(intervalCheck);
+                if (pc) {
+                    pc.close();
+                }
+            }
+        }
+
+        function error(e) {
+            over();
+        }
+
+        function ipToInt(ip) {
+            var parts = ip.split('.'), value = 0;
+            for (var i = 0; i < parts.length; i++) {
+                value = (value << 8) | (parseInt(parts[i]) & 0xff);
+            }
+            return value;
+        }
+
+        function grepSDP(sdp) {
+            var lines = sdp.split('\r\n'), line, parts, type, addr;
+            for (var i = 0; i < lines.length; i++) {
+                line = lines[i];
+                parts = line.split(' ');
+                if (line.indexOf("a=candidate:") == 0 && (type = parts[7]) && type == "host" && (addr = parts[4])) {
+                    //candidate line
+                } else if (line.indexOf("a=rtcp:") == 0 && (type = parts[2]) && type == "IP4" && (addr = parts[3])) {
+                    //rtcp line
+                } else if (line.indexOf("c=") == 0 && (type = parts[1]) && type == "IP4" && (addr = parts[2])) {
+                    //connection line
+                } else {
+                    continue;
+                }
+                if (addr && !addrs[addr] && /[0-9]{1,3}(\.[0-9]{1,3}){3}/.test(addr)) {
+                    if (addr == '0.0.0.0' || addr.indexOf('127.') == 0 || addr.indexOf('169.254') == 0 || (ipToInt(addr) & 0xf0000000) == 0xe0000000) {
+                        //无效的地址(anylocal/loopback/multicast)
+                    } else {
+                        //加入一个有效的地址
+                        addrs[addr] = 1;
+                        ipArr.push(addr);
+                    }
+                }
+            }
+            if (ipArr.length) {
+                over();
+            }
+        }
+
+        try {
+            if (!ios && (RTCPeerConnection = window.RTCPeerConnection
+                    || window.mozRTCPeerConnection
+                    || window.webkitRTCPeerConnection)) {
+                pc = new RTCPeerConnection({iceServers: []}, {
+                    optional: [{RtpDataChannels: true}]
+                });
+                pc.onicecandidate = function (ice) {
+                    if (ice.candidate && ice.candidate.candidate) {
+                        grepSDP("a=" + ice.candidate.candidate);
+                    }
+                };
+                pc.createDataChannel("openinstall");
+                pc.createOffer(function (result) {
+                    try {
+                        pc.setLocalDescription(result, function () {
+                        }, error);
+                    } catch (e) {
+                        error(e);
+                    }
+                }, error);
+                setTimeout(over, 100);
+            } else {
+                error("not exists");
+            }
+        } catch (e) {
+            error(e);
+        }
+        return function (callback) {
+            delay.run(function () {
+                callback(ipArr.slice(0));
+            });
+        }
+    })();
+    var JSON = window.JSON
+        || {
+            parse: function (sJSON) {
+                return eval('(' + sJSON + ')');
+            },
+            stringify: (function () {
+                var toString = Object.prototype.toString;
+                var isArray = Array.isArray || function (a) {
+                        return toString.call(a) === '[object Array]';
+                    };
+                var escMap = {
+                    '"': '\\"',
+                    '\\': '\\\\',
+                    '\b': '\\b',
+                    '\f': '\\f',
+                    '\n': '\\n',
+                    '\r': '\\r',
+                    '\t': '\\t'
+                };
+                var escFunc = function (m) {
+                    return escMap[m]
+                        || '\\u'
+                        + (m.charCodeAt(0) + 0x10000).toString(16)
+                            .substr(1);
+                };
+                var escRE = /[\\"\u0000-\u001F\u2028\u2029]/g;
+                return function stringify(value) {
+                    if (value == null) {
+                        return 'null';
+                    } else if (typeof value === 'number') {
+                        return isFinite(value) ? value.toString() : 'null';
+                    } else if (typeof value === 'boolean') {
+                        return value.toString();
+                    } else if (typeof value === 'object') {
+                        if (typeof value.toJSON === 'function') {
+                            return stringify(value.toJSON());
+                        } else if (isArray(value)) {
+                            var res = '[';
+                            for (var i = 0; i < value.length; i++)
+                                res += (i ? ', ' : '')
+                                    + stringify(value[i]);
+                            return res + ']';
+                        } else if (toString.call(value) === '[object Object]') {
+                            var tmp = [];
+                            for (var k in value) {
+                                if (value.hasOwnProperty(k))
+                                    tmp.push(stringify(k) + ': '
+                                        + stringify(value[k]));
+                            }
+                            return '{' + tmp.sort().join(', ') + '}';
+                        }
+                    }
+                    return '"' + value.toString().replace(escRE, escFunc)
+                        + '"';
+                };
+            })()
+        };
+
+
+    function ajax(options) {
+        var xhr = new XMLHttpRequest();
+        var data = options.data, url = options.url, method = options.method;
+        if (data && "string" != typeof data) {
+            data = JSON.stringify(data);
+        }
+        if (method != "POST" && data) {
+            url = url + (url.indexOf('?') > -1 ? "&" : "?") + data;
+            data = null;
+        }
+        xhr.onreadystatechange = function () {
+            if (xhr.readyState == 4) {
+                if (xhr.status == 200) {
+                    var res = xhr.response || xhr.responseText || {};
+                    options.success
+                    && options.success(typeof res == "string" ? JSON
+                        .parse(res) : res);
+                } else {
+                    options.error && options.error(xhr, xhr.statusText);
+                }
+                options.complete && options.complete(xhr);
+            }
+        };
+        xhr.ontimeout = function () {
+            options.error && options.error(xhr, xhr.statusText);
+        };
+
+        try {
+            xhr.open(method, url, options.async !== false);
+            xhr.withCredentials = true;
+            try{
+                if(xhr.setRequestHeader && options.contentType){
+                    xhr.setRequestHeader("Content-Type",options.contentType);
+                }
+                if(options.timeout){
+                    xhr.timeout = options.timeout
+                }
+            }catch(e1){}
+            xhr.send(data||null);
+        } catch (e2) {
+        }
+        return xhr;
+    }
+
+    function webglDetect() {
+        var canvas = document.createElement("canvas");
+        if (canvas && typeof canvas.getContext == 'function') {
+            var idents = ["webgl", "webgl2", "experimental-webgl2", "experimental-webgl"];
+            for (var i = 0; i < idents.length; i++) {
+                var ctx = idents[i];
+                var gl = canvas.getContext(ctx);
+                if (!gl) {
+                    continue;
+                }
+                var ret = {};
+                ret["context"] = ctx;
+                ret["version"] = gl["getParameter"](gl["VERSION"]);
+                ret["vendor"] = gl["getParameter"](gl["VENDOR"]);
+                ret["sl_version"] = gl["getParameter"](gl["SHADING_LANGUAGE_VERSION"]);
+                ret["max_texture_size"] = gl["getParameter"](gl["MAX_TEXTURE_SIZE"]);
+                var info = gl.getExtension("WEBGL_debug_renderer_info");
+                if (info) {
+                    ret["vendor"] = gl["getParameter"](info["UNMASKED_VENDOR_WEBGL"]);
+                    ret["renderer"] = gl["getParameter"](info["UNMASKED_RENDERER_WEBGL"]);
+                }
+                return ret;
+            }
+        }
+        return {};
+    }
+
+    function getFinger(callback) {
+        getLocalIP(function (ip) {
+            var width, height, pixelRatio, webgl;
+            try {
+                width = window.screen.width || "";
+                height = window.screen.height || "";
+                pixelRatio = window.devicePixelRatio || "";
+                webgl = webglDetect();
+            } catch (e) {
+            }
+            for (var i = 0, ip = ip || [], l = ip.length; i < l; i++) {
+                ip[i] = encryptToBase64(ip[i] || "");
+            }
+            callback({
+                sw: encryptToBase64("" + (width || 0)),
+                sh: encryptToBase64("" + (height || 0)),
+                sp: pixelRatio,
+                gv: encryptToBase64(webgl.version || ""),
+                gr: encryptToBase64(webgl.renderer || ""),
+                li: ip
+            });
+        });
+    }
+
+    function copy(html, pasterYybPrefix, pasterYybMills) {
+        var ex = "ex", ecC = "ecC", ommand = "ommand", co = "co", py = "py";
+        var execCommand = ex + ecC + ommand, copy = co + py;
+        if (typeof document[execCommand] != 'function') {
+            return false;
+        }
+        var div = document.createElement("div");
+        div.innerHTML = html;
+        var elements = [];
+        for (var i = 0; i < div.children.length; i++) {
+            elements[i] = div.children[i];
+        }
+        var succeeded = false, element, selection, yybFlag = pasterYybPrefix ? (pasterYybPrefix + (new Date().getTime() + (pasterYybMills || 1)) + "-") : null;
+        for (var i = 0; i < elements.length; i++) {
+            try {
+                element = elements[i];
+                if(android){
+                	element.style.position="absolute";
+                    element.style.top="-100px";
+                }
+                document.body.appendChild(element);
+                if (element.nodeName === 'SELECT') {
+                    element.focus();
+                }
+                else if (element.nodeName === 'INPUT' || element.nodeName === 'TEXTAREA') {
+                    if (yybFlag) {
+                        element.value = encodeToBase64(decodeFromBase64(element.value) + yybFlag);
+                    }
+                    var isReadOnly = element.hasAttribute('readonly');
+                    if (!isReadOnly) {
+                        element.setAttribute('readonly', '');
+                    }
+                    element.select();
+                    element.setSelectionRange(0, element.value.length);
+
+                    if (!isReadOnly) {
+                        element.removeAttribute('readonly');
+                    }
+                }
+                else {
+                    if (element.hasAttribute('contenteditable')) {
+                        element.focus();
+                    }
+                    if (yybFlag) {
+                        element.setAttribute("class", yybFlag);
+                    }
+                    selection = window.getSelection();
+                    var range = document.createRange();
+                    range.selectNode(element);
+                    selection.removeAllRanges();
+                    selection.addRange(range);
+                }
+                succeeded = document[execCommand](copy);
+            } catch (e) {
+                succeeded = false;
+            }
+            document.body.removeChild(element);
+        }
+        if (selection) {
+            selection.removeAllRanges();
+        }
+        return succeeded;
+    }
+
+    function runIfNotHidden(func, timeout) {
+        // var ua = (navigator.userAgent||"").toLowerCase();
+        // var androidQQ = ua.indexOf('android')!=-1 && ua.indexOf(" qq/")!=-1;
+        var hidden, visibilityChange;
+        var androidQQ = false;
+        if (androidQQ) {
+            hidden = "hidden";
+            visibilityChange = "qbrowserVisibilityChange";
+        } else if (typeof document.hidden !== "undefined") { // Opera 12.10 and Firefox 18 and later support
+            hidden = "hidden";
+            visibilityChange = "visibilitychange";
+        } else if (typeof document.msHidden !== "undefined") {
+            hidden = "msHidden";
+            visibilityChange = "msvisibilitychange";
+        } else if (typeof document.webkitHidden !== "undefined") {
+            hidden = "webkitHidden";
+            visibilityChange = "webkitvisibilitychange";
+        }
+        var isHidden = function (e) {
+            if (androidQQ && e && typeof e.hidden != 'undefined') {
+                return e.hidden;
+            }
+            return document[hidden];
+        }
+        var t = setTimeout(function () {
+            if (t != null && !isHidden()) {
+                func();
+                t = null;
+            }
+        }, timeout);
+        var eventListener = function (e) {
+            if (t != null && isHidden(e)) {
+                clearTimeout(t);
+                t = null;
+                document.removeEventListener(visibilityChange, eventListener);
+            }
+
+        };
+        if (visibilityChange) {
+            document.addEventListener(visibilityChange, eventListener, false);
+        }
+    }
+
+    var schemeMethods = {
+        frm: function (url) {
+            var iframe = document.createElement("iframe");
+            iframe.style.display = "none";
+            iframe.style.visibility = "hidden";
+            iframe.src = url;
+            document.body.appendChild(iframe);
+        },
+        loc: function (url) {
+            window.location = url;
+        },
+        hrf: function (url) {
+            var a = document.createElement("a");
+            a.style.display = "none";
+            a.href = url;
+            document.body.appendChild(a);
+            a.click();
+        },
+        inhrf: function (url) {
+            var e = document.createElement('script');
+            e.setAttribute("type", "text/javascript");
+            e.innerHTML = '(function(){var a = document.createElement("a");a.style.display = "none";a.href = "' + url.replace(/"/g, '\\"') + '";document.body.appendChild(a);a.click();})()';
+            document.body.appendChild(e);
+        },
+        open: function (url) {
+            window.open(url);
+        }
+    };
+
+    function startScheme(schemeMethod, url, failed, failTimeout) {
+        if (typeof failed == 'function') {
+            runIfNotHidden(failed, failTimeout);
+        }
+        schemeMethods[schemeMethod](url);
+    }
+
+    var SDK = function (config, info) {
+        config = config || {};
+        if (!config.appKey) {
+            alert("appKey not specified");
+            return;
+        }
+        var delay = new Delay(), ths = this;
+        if (typeof config.onready == "function") {
+            delay.run(function () {
+                config.onready.call(ths);
+            });
+        }
+        if (config.buttonId) {
+            delay.run(function () {
+                var buttons = config.buttonId.split(' ');
+                for (var i = 0; i < buttons.length; i++) {
+                    var e = document.getElementById(buttons[i]);
+                    if (e) {
+                        e.addEventListener("click", function () {
+                            ths.wakeupOrInstall();
+                        });
+                    }
+                }
+            });
+        }
+        var tip, fallbackUrl, fallbackMethod, fallbackTimeout, schemeUrl, schemeMethod, schemeTimeout, pasterHtml, pasterYybPrefix, pasterYybMills, copied, disableSOI,channelCode,clickStatsUrl;
+
+        function fallback() {
+            if (fallbackUrl) {
+                if (tip) {
+                    runIfNotHidden(function () {
+                        document.body.appendChild(tip);
+                    }, 400);
+                }
+//                var url = mergeUrlParams(fallbackUrl, {p: copied ? 1 : 0});
+                var url = fallbackUrl;
+                schemeMethods[fallbackMethod](url);
+            } else{
+                if (tip) {
+                    document.body.appendChild(tip);
+                }
+            }
+        }
+
+        function start(scheme, install, opt) {
+            delay.run(function () {
+                opt = opt || {};
+                if (install && disableSOI) {
+                    //scheme on install；
+                    scheme = false;
+                }
+                if (pasterHtml && install) {
+                	mark();
+                    copied = copy(pasterHtml, pasterYybPrefix, pasterYybMills);
+                }
+                var fallbackFunc;
+                if (install) {
+                   fallbackFunc = fallback;
+                    if(clickStatsUrl){
+                        ajax({method: 'POST', url: clickStatsUrl});
+                    }
+                }
+                if (schemeUrl && scheme) {
+                    startScheme(schemeMethod, schemeUrl, fallbackFunc, opt.timeout || schemeTimeout);
+                } else if (fallbackFunc) {
+                    fallbackFunc();
+                }
+            });
+        }
+
+        function createMask(defaultMaskHtml){
+            var dom=config.mask||defaultMaskHtml;
+            if(typeof dom=='function'){
+                dom=dom()||defaultMaskHtml;
+            }
+            if(typeof dom=='string'){
+                var node = document.createElement("div");
+                node.innerHTML = dom;
+                dom = node.children[0];
+            }
+            var handler = function(){
+                document.body.removeChild(dom);
+            };
+            if(dom.addEventListener){
+                dom.addEventListener("click",handler);
+            }else{
+                dom.onclick=handler;
+            }
+            return dom;
+        }
+
+        function init() {
+            var params = {
+                channelCode: config.channelCode || SDK.parseUrlParams().channelCode,
+                c: config._channelRedirect ? 1 : null,
+                apkFileName: config.apkFileName,
+                preferWakeup: config.preferWakeup,
+                hash: location.hash,
+                _pkgId:config._pkgId
+            };
+            getFinger(function (finger) {
+                ajax({
+                    url: mergeUrlParams(SDK.server + "/web/init/" + config.appKey,params,finger),
+                    method: 'POST',
+                    contentType:"text/plain;charset=utf-8",
+                    data: info,
+                    success: function (data) {
+                        docReady(function () {
+                            if (data.sh) {
+                                tip = createMask(data.sh);
+                            }
+                            fallbackUrl = data.fu;
+                            fallbackMethod = data.fm;
+                            fallbackTimeout = data.ft;
+
+                            schemeUrl = data.su;
+                            schemeMethod = data.sm;
+                            schemeTimeout = data.st;
+
+                            pasterHtml = data.ph ? decryptFromBase64(data.ph) : null;
+                            pasterYybPrefix = data.pyp ? decryptFromBase64(data.pyp) : null;
+                            pasterYybMills = data.pye ? parseInt(decryptFromBase64(data.pye) || "0") : 0;
+
+                            disableSOI = data.dsoi;
+                            channelCode = data.channelCode;
+
+                            clickStatsUrl = data.csu;
+                            /*//服务器已去除此优化
+                            try{
+                                var images = data.images||[];
+                                if(images.length>0){
+                                    for(var i=0;i<images.length;i++){
+                                        var img = new Image();
+                                        img.src="//"+images[i];
+                                    }
+                                }
+                            }catch(e){}
+                            */
+                            delay.ready();
+                        });
+                    }
+                });
+            });
+        }
+
+        this.wakeupOrInstall = function (opt) {
+            start(true, true, opt);
+        };
+        this.schemeWakeup = function (opt) {
+            start(true, false, opt);
+        }
+        this.install = function(opt){
+        	start(false, true, opt);
+        }
+        init();
+    }
+
+    SDK.channelRedirect = function (appKey, channelCode) {
+        new SDK({
+            appKey: appKey,
+            channelCode: channelCode,
+            _channelRedirect: true
+        }).wakeupOrInstall();
+    };
+    SDK.parseUrlParams = parseUrlParams;
+    SDK.docReady = docReady;
+    SDK.server = "https://openinstall.io";
+    SDK.wakeupOrInstall = function(schemeMethod,schemeUrl,fallbackMethod,fallbackUrl,timeout){
+        if(schemeUrl){
+            startScheme(schemeMethod,schemeUrl,function(){
+                schemeMethods[fallbackMethod](fallbackUrl);
+            },timeout);
+        }else{
+            schemeMethods[fallbackMethod](fallbackUrl);
+        }
+    }
+    return SDK;
+})(window, document, XMLHttpRequest);(function(){var openinstall=new OpenInstall({appKey:"ma0bs9",onready:function(){var banner=document.createElement("div"),op=this;banner.innerHTML='<div class="-openinstall-banner" style="position: fixed; left: 0; bottom: 0; width: 100%; background: rgb(1, 0, 1)"><table style="table-layout: fixed; width: 100%;" border="0" cellspacing="0" cellpadding="0"><tbody><tr><td style="vertical-align: middle; height: 60px; text-align: center; width: 50px"><img class="-openinstall-banner-icon" src="https://res.cdn.openinstall.io/app_icon/ma0bs9/991385959582789953-1584154314041.png" alt="" style="vertical-align: middle; width: 41px; height: 41px; margin: 0 5px" /></td><td style="vertical-align: middle; height: 60px; text-align: left"><p class="-openinstall-banner-title" style="font-size: 18px; margin: 0; line-height: 25px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: rgb(255, 255, 255)">大亨娱乐</p><p class="-openinstall-banner-desc" style="font-size: 14px; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: rgb(255, 255, 255)">火爆无限代返佣</p></td><td style="vertical-align: middle; height: 60px; text-align: center; width: 100px"><a class="-openinstall-banner-button" href="javascript:void;"style="display: inline-block; text-decoration: none; cursor: pointer; font-size: 14px;margin:0; border-radius: 15px; padding: 5px 10px; max-width:70px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border: rgb(242, 0, 0) solid 1px; background: rgb(242, 0, 0); color: rgb(255, 255, 255);">下载</a></td></tr></tbody></table></div>';document.body.appendChild(banner);banner.addEventListener("click",function(e){if(e.target.className=="-openinstall-banner-button"){op.wakeupOrInstall();}},true);}},OpenInstall.parseUrlParams());openinstall.schemeWakeup();})();
